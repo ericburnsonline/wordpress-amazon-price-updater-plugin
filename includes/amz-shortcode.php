@@ -8,10 +8,19 @@ if (!defined('ABSPATH')) {
 |--------------------------------------------------------------------------
 | Shortcode registration
 |--------------------------------------------------------------------------
+|
+| Usage:
+|
+|     [amz_price asin="B00X4WHP5E"]
+|
 */
 
-add_shortcode('amz_price', 'amzpu_shortcode_price');
+add_action('init', 'amzpu_register_shortcodes');
 
+function amzpu_register_shortcodes()
+{
+    add_shortcode('amz_price', 'amzpu_shortcode_price');
+}
 
 /*
 |--------------------------------------------------------------------------
@@ -25,75 +34,66 @@ function amzpu_shortcode_price($atts)
         [
             'asin' => '',
         ],
-        $atts
+        $atts,
+        'amz_price'
     );
 
-    $asin = strtoupper(trim($atts['asin']));
+    $asin = strtoupper(trim((string) $atts['asin']));
 
-    if (!$asin) {
-        return '';
+    if ($asin === '') {
+        return '<span class="amzpu-message">' .
+            esc_html__('Amazon link unavailable: missing ASIN.', 'amz-price-updater') .
+            '</span>';
     }
-
-    $cache_key = 'amzpu_' . $asin;
-    $cached = get_transient($cache_key);
-
-    if ($cached && isset($cached['price'])) {
-        $date = date('n/j/Y', $cached['checked_at']);
-        return esc_html($cached['price'] . ' as of ' . $date);
-    }
-
-    /*
-    If price not cached, schedule refresh and return placeholder
-    */
-
-    if (!wp_next_scheduled('amzpu_refresh_asin_event', [$asin])) {
-        wp_schedule_single_event(time() + 60, 'amzpu_refresh_asin_event', [$asin]);
-    }
-
-    return 'Price updating…';
-}
-
-
-/*
-|--------------------------------------------------------------------------
-| Background refresh hook
-|--------------------------------------------------------------------------
-*/
-
-add_action('amzpu_refresh_asin_event', 'amzpu_refresh_asin');
-
-
-/*
-|--------------------------------------------------------------------------
-| Refresh ASIN price (placeholder implementation)
-|--------------------------------------------------------------------------
-*/
-
-function amzpu_refresh_asin($asin)
-{
-    $asin = strtoupper(trim($asin));
 
     if (!preg_match('/^[A-Z0-9]{10}$/', $asin)) {
-        return;
+        return '<span class="amzpu-message">' .
+            esc_html__('Amazon link unavailable: invalid ASIN.', 'amz-price-updater') .
+            '</span>';
     }
 
-    /*
-    Placeholder implementation.
+    $partner_tag = amzpu_get_partner_tag();
 
-    In a future version this function will call the Amazon Product Advertising API
-    and retrieve the Buy Box price.
+    if ($partner_tag === '') {
+        return '<span class="amzpu-message">' .
+            esc_html__(
+                'Amazon link unavailable: Associate tag has not been configured.',
+                'amz-price-updater'
+            ) .
+            '</span>';
+    }
 
-    For now we simply store a dummy value so the shortcode flow works.
-    */
-
-    $price = '$19.95';
-
-    set_transient(
-        'amzpu_' . $asin,
+    $url = add_query_arg(
         [
-            'price' => $price,
-            'checked_at' => time(),
+            'tag' => $partner_tag,
         ],
-        DAY_IN_SECONDS
+        'https://www.amazon.com/dp/' . rawurlencode($asin) . '/'
     );
+
+    $display_mode = amzpu_get_display_mode();
+    $link_text = amzpu_get_link_text();
+
+    $output = '<span class="amzpu-product-link">';
+
+    if ($display_mode === 'prices_coming_soon') {
+        $output .= '<span class="amzpu-status">' .
+            esc_html__('Prices coming soon.', 'amz-price-updater') .
+            '</span> ';
+    } elseif ($display_mode === 'live_prices') {
+        /*
+         * Live price retrieval is intentionally not enabled in this phase.
+         * This prevents accidental display of an unverified or stale price.
+         */
+        $output .= '<span class="amzpu-status">' .
+            esc_html__('Live prices are not enabled yet.', 'amz-price-updater') .
+            '</span> ';
+    }
+
+    $output .= '<a href="' . esc_url($url) . '" rel="nofollow sponsored">';
+    $output .= esc_html($link_text);
+    $output .= '</a>';
+
+    $output .= '</span>';
+
+    return apply_filters('amzpu_shortcode_output', $output, $asin, $display_mode);
 }
